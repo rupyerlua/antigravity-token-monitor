@@ -1,0 +1,7 @@
+{
+  "name": "token-monitor",
+  "displayName": "Token Monitor",
+  "description": "在右侧辅助面板实时显示当前会话的上下文窗口水位、缓存命中率与每步 Token 消耗。",
+  "version": "1.0.0",
+  "logo": "assets/logo.svg"
+}

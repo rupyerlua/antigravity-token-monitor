@@ -1,0 +1,9 @@
+.DS_Store
+Thumbs.db
+node_modules/
+*.log
+.env
+.env.*
+gen_meta_cache.json
+sidecar_data/
+plugin_data/

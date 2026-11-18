@@ -1,0 +1,1166 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Token 与上下文监控</title>
+  <script src="/preload.js"></script>
+  <style>
+    :root {
+      color-scheme: light;
+      --tm-bg: var(--background, #f7f7f8);
+      --tm-card: var(--card, #ffffff);
+      --tm-muted: var(--muted, #eff0f1);
+      --tm-fg: var(--foreground, #1d1f21);
+      --tm-fg-muted: var(--muted-foreground, #5d676f);
+      --tm-border: var(--border, rgba(0, 0, 0, 0.08));
+      --tm-card-border: var(--card-border, rgba(0, 0, 0, 0.1));
+      --tm-primary: var(--primary, #007acc);
+      --tm-primary-fg: var(--primary-foreground, #ffffff);
+      --tm-success: #2ea043;
+      --tm-warning: #d29922;
+      --tm-danger: #cf222e;
+      --tm-cache: #8250df;
+      --tm-output: #1a7f37;
+      --tm-hover: color-mix(in srgb, var(--tm-fg) 5%, transparent);
+      --tm-grid: color-mix(in srgb, var(--tm-fg) 10%, transparent);
+      --tm-font: var(--font-family, "PingFang SC", "Microsoft YaHei", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
+      --tm-mono: var(--editor-font-family, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+    }
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --tm-success: #3fb950;
+      --tm-warning: #d29922;
+      --tm-danger: #f85149;
+      --tm-cache: #a371f7;
+      --tm-output: #56d364;
+      --tm-hover: color-mix(in srgb, var(--tm-fg) 7%, transparent);
+      --tm-grid: color-mix(in srgb, var(--tm-fg) 12%, transparent);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      font-family: var(--tm-font);
+      font-size: 15px;
+      line-height: 1.5;
+      color: var(--tm-fg);
+      background: var(--tm-bg);
+      -webkit-font-smoothing: antialiased;
+    }
+    button { font: inherit; color: inherit; }
+    .hidden { display: none !important; }
+    .container {
+      max-width: 1020px;
+      margin: 0 auto;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .title-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .title {
+      font-size: 18px;
+      font-weight: 600;
+      margin: 0;
+    }
+    .live-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      font-size: 12px;
+      font-weight: 500;
+      color: var(--tm-fg-muted);
+      background: var(--tm-muted);
+      border: 1px solid var(--tm-border);
+      padding: 2px 9px;
+      border-radius: 999px;
+    }
+    .live-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--tm-success);
+      animation: pulse 2s ease-in-out infinite;
+    }
+    .live-pill.err .live-dot {
+      background: var(--tm-danger);
+      animation: none;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.35; }
+    }
+    .segmented {
+      display: inline-flex;
+      background: var(--tm-muted);
+      border: 1px solid var(--tm-border);
+      border-radius: 7px;
+      padding: 2px;
+      gap: 2px;
+    }
+    .seg-btn {
+      border: none;
+      background: transparent;
+      color: var(--tm-fg-muted);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 5px 12px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.15s ease, color 0.15s ease;
+    }
+    .seg-btn:hover { color: var(--tm-fg); }
+    .seg-btn.active {
+      background: var(--tm-card);
+      color: var(--tm-fg);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+    }
+    .range-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .range-chips {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .chip-btn {
+      border: 1px solid var(--tm-card-border);
+      background: var(--tm-card);
+      color: var(--tm-fg-muted);
+      font-size: 13px;
+      font-weight: 500;
+      padding: 5px 12px;
+      border-radius: 6px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.15s ease;
+    }
+    .chip-btn:hover {
+      background: var(--tm-hover);
+      color: var(--tm-fg);
+    }
+    .chip-btn.active {
+      background: var(--tm-primary);
+      border-color: var(--tm-primary);
+      color: var(--tm-primary-fg);
+    }
+    .granularity-hint {
+      font-size: 12px;
+      color: var(--tm-fg-muted);
+    }
+    .view-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+    .card {
+      background: var(--tm-card);
+      border: 1px solid var(--tm-card-border);
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .card-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 10px;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .card-label {
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--tm-fg-muted);
+    }
+    .ctx-numbers {
+      font-family: var(--tm-mono);
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .progress-track {
+      width: 100%;
+      height: 11px;
+      border-radius: 999px;
+      background: var(--tm-muted);
+      overflow: hidden;
+    }
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: var(--tm-primary);
+      transition: width 0.25s ease, background-color 0.25s ease;
+    }
+    .progress-fill.warn { background: var(--tm-warning); }
+    .progress-fill.danger { background: var(--tm-danger); }
+    .ctx-sub {
+      margin-top: 8px;
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      font-size: 13px;
+      color: var(--tm-fg-muted);
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 12px;
+    }
+    @media (max-width: 480px) {
+      .grid { grid-template-columns: 1fr; }
+    }
+    .stat-value {
+      font-family: var(--tm-mono);
+      font-size: 22px;
+      font-weight: 600;
+      margin: 6px 0 4px;
+    }
+    .stat-sub {
+      font-family: var(--tm-mono);
+      font-size: 13px;
+      color: var(--tm-fg-muted);
+      word-break: break-word;
+    }
+    /* Current mode collapsible steps */
+    .legend {
+      display: flex;
+      gap: 10px;
+      font-size: 12px;
+      color: var(--tm-fg-muted);
+      flex-wrap: wrap;
+    }
+    .legend-item {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 2px;
+      display: inline-block;
+    }
+    .dot-in { background: var(--tm-primary); }
+    .dot-cache { background: var(--tm-cache); }
+    .dot-out { background: var(--tm-output); }
+    .collapse-header {
+      width: 100%;
+      background: none;
+      border: none;
+      padding: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      cursor: pointer;
+      text-align: left;
+    }
+    .collapse-left {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+    .collapse-toggle-label {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--tm-primary);
+      white-space: nowrap;
+    }
+    .steps-body {
+      margin-top: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    .step-row {
+      display: grid;
+      grid-template-columns: 52px 1fr auto;
+      align-items: center;
+      gap: 10px;
+      padding: 8px 10px;
+      border-radius: 6px;
+      background: var(--tm-muted);
+      font-size: 13px;
+    }
+    .step-idx {
+      font-family: var(--tm-mono);
+      font-weight: 600;
+      font-size: 12px;
+      color: var(--tm-fg-muted);
+    }
+    .step-bar-wrap {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .step-mini-track {
+      height: 6px;
+      border-radius: 999px;
+      background: var(--tm-card);
+      overflow: hidden;
+      display: flex;
+    }
+    .seg-in { background: var(--tm-primary); height: 100%; }
+    .seg-cache { background: var(--tm-cache); height: 100%; }
+    .seg-out { background: var(--tm-output); height: 100%; }
+    .step-breakdown {
+      font-family: var(--tm-mono);
+      font-size: 12px;
+      color: var(--tm-fg-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .step-total {
+      font-family: var(--tm-mono);
+      font-size: 14px;
+      font-weight: 600;
+      text-align: right;
+    }
+    /* All conversations analytics panel: chart left + model filter right */
+    .analytics-card {
+      padding: 16px;
+    }
+    .analytics-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(240px, 1fr);
+      gap: 16px;
+      align-items: start;
+    }
+    @media (max-width: 600px) {
+      .analytics-layout {
+        grid-template-columns: 1fr;
+      }
+    }
+    .chart-section {
+      min-width: 0;
+      position: relative;
+    }
+    .section-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-bottom: 10px;
+      min-height: 24px;
+    }
+    .filter-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      background: var(--tm-muted);
+      border: 1px solid var(--tm-border);
+      color: var(--tm-fg);
+    }
+    .link-btn {
+      border: none;
+      background: none;
+      padding: 0;
+      color: var(--tm-primary);
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+    }
+    .link-btn:hover { text-decoration: underline; }
+    .chart-wrap {
+      width: 100%;
+      position: relative;
+    }
+    .chart-svg {
+      display: block;
+      width: 100%;
+      height: 245px;
+      overflow: visible;
+    }
+    .axis-text {
+      font-family: var(--tm-mono);
+      font-size: 12px;
+      fill: var(--tm-fg-muted);
+    }
+    .grid-line {
+      stroke: var(--tm-grid);
+      stroke-width: 1;
+      stroke-dasharray: 2 3;
+    }
+    .bar-col {
+      cursor: pointer;
+    }
+    .bar-hover-bg {
+      fill: transparent;
+      transition: fill 0.12s ease;
+    }
+    .bar-col:hover .bar-hover-bg {
+      fill: var(--tm-hover);
+    }
+    .chart-tooltip {
+      position: absolute;
+      z-index: 20;
+      pointer-events: none;
+      background: var(--tm-card);
+      border: 1px solid var(--tm-card-border);
+      border-radius: 6px;
+      padding: 8px 10px;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+      font-size: 12px;
+      min-width: 160px;
+      max-width: 260px;
+    }
+    .tt-title {
+      font-weight: 600;
+      margin-bottom: 4px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+    }
+    .tt-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 2px;
+      color: var(--tm-fg-muted);
+    }
+    .tt-name {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .tt-dot {
+      width: 7px;
+      height: 7px;
+      border-radius: 2px;
+      flex-shrink: 0;
+    }
+    .tt-val {
+      font-family: var(--tm-mono);
+      color: var(--tm-fg);
+      font-weight: 500;
+    }
+    .models-section {
+      min-width: 0;
+      border-left: 1px solid var(--tm-border);
+      padding-left: 14px;
+    }
+    @media (max-width: 600px) {
+      .models-section {
+        border-left: none;
+        border-top: 1px solid var(--tm-border);
+        padding-left: 0;
+        padding-top: 12px;
+      }
+    }
+    .models-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      max-height: 300px;
+      overflow-y: auto;
+      padding-right: 2px;
+    }
+    .model-item {
+      width: 100%;
+      text-align: left;
+      background: transparent;
+      border: 1px solid transparent;
+      border-radius: 7px;
+      padding: 8px 10px;
+      cursor: pointer;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      transition: opacity 0.15s ease, background-color 0.15s ease, border-color 0.15s ease;
+    }
+    .model-item:hover {
+      background: var(--tm-hover);
+    }
+    .model-item.selected {
+      background: var(--tm-muted);
+      border-color: var(--tm-primary);
+    }
+    .model-item.dimmed {
+      opacity: 0.42;
+    }
+    .model-item.dimmed:hover {
+      opacity: 0.85;
+    }
+    .model-top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .model-name-wrap {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      min-width: 0;
+    }
+    .model-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 3px;
+      flex-shrink: 0;
+    }
+    .model-name {
+      font-size: 14px;
+      font-weight: 600;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .model-val {
+      font-family: var(--tm-mono);
+      font-size: 14px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+    .model-bar-track {
+      width: 100%;
+      height: 6px;
+      border-radius: 999px;
+      background: var(--tm-muted);
+      overflow: hidden;
+    }
+    .model-bar-fill {
+      height: 100%;
+      border-radius: 999px;
+      transition: width 0.25s ease;
+    }
+    .model-meta {
+      font-family: var(--tm-mono);
+      font-size: 12px;
+      color: var(--tm-fg-muted);
+      line-height: 1.4;
+    }
+    .empty {
+      text-align: center;
+      padding: 20px 10px;
+      color: var(--tm-fg-muted);
+      font-size: 14px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header class="header">
+      <div class="title-group">
+        <h1 class="title">Token 与上下文监控</h1>
+        <span id="live-pill" class="live-pill">
+          <span class="live-dot"></span>
+          <span id="live-text">实时</span>
+        </span>
+      </div>
+      <div class="segmented" role="tablist" aria-label="统计范围">
+        <button type="button" id="mode-current" class="seg-btn active" role="tab" aria-selected="true">当前会话</button>
+        <button type="button" id="mode-all" class="seg-btn" role="tab" aria-selected="false">所有会话</button>
+      </div>
+    </header>
+
+    <!-- 当前会话视图：无会话选择、无日期选择，仅展示当前会话上下文、核心指标与可折叠步骤 -->
+    <div id="current-view" class="view-stack">
+      <section class="card">
+        <div class="card-header">
+          <span class="card-label">上下文窗口占用</span>
+          <span id="ctx-numbers" class="ctx-numbers">0 / 1,000,000 (0.0%)</span>
+        </div>
+        <div class="progress-track">
+          <div id="ctx-bar" class="progress-fill"></div>
+        </div>
+        <div class="ctx-sub">
+          <span id="ctx-remaining">剩余可用: 1,000,000</span>
+          <span id="ctx-model-info">模型: -</span>
+        </div>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <div class="card-label">缓存命中率</div>
+          <div id="cur-cache-rate" class="stat-value">0%</div>
+          <div class="stat-sub">最新一轮提示词</div>
+        </div>
+        <div class="card">
+          <div class="card-label">最新一轮消耗</div>
+          <div id="cur-last-total" class="stat-value">0</div>
+          <div id="cur-last-sub" class="stat-sub">输入 0 · 缓存 0 · 输出 0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">本会话累计</div>
+          <div id="cur-session-total" class="stat-value">0</div>
+          <div id="cur-session-sub" class="stat-sub">总输入 0 · 总输出 0</div>
+        </div>
+      </section>
+
+      <section class="card">
+        <button type="button" id="steps-toggle" class="collapse-header" aria-expanded="true" aria-controls="steps-body">
+          <span class="collapse-left">
+            <span id="steps-title" class="card-label">每步消耗明细 (共 0 步)</span>
+            <span class="legend">
+              <span class="legend-item"><span class="dot dot-in"></span>输入</span>
+              <span class="legend-item"><span class="dot dot-cache"></span>缓存</span>
+              <span class="legend-item"><span class="dot dot-out"></span>输出</span>
+            </span>
+          </span>
+          <span id="steps-chevron" class="collapse-toggle-label">▾ 收起</span>
+        </button>
+        <div id="steps-body" class="steps-body">
+          <div class="empty">正在等待日志数据…</div>
+        </div>
+      </section>
+    </div>
+
+    <!-- 所有会话视图：无上下文、无会话列表、无每步明细；支持 全部日期/今天/7天/30天 + 柱状图 + 右侧模型过滤 -->
+    <div id="all-view" class="view-stack hidden">
+      <div class="range-toolbar">
+        <div class="range-chips" role="group" aria-label="时间范围">
+          <button type="button" class="chip-btn active" data-range="all">全部日期</button>
+          <button type="button" class="chip-btn" data-range="today">今天</button>
+          <button type="button" class="chip-btn" data-range="7d">7天</button>
+          <button type="button" class="chip-btn" data-range="30d">30天</button>
+        </div>
+        <span id="granularity-hint" class="granularity-hint">粒度：按天统计</span>
+      </div>
+
+      <section class="grid">
+        <div class="card">
+          <div class="card-label">总 Token 消耗</div>
+          <div id="all-total" class="stat-value">0</div>
+          <div id="all-total-sub" class="stat-sub">输入 0 · 缓存 0 · 输出 0</div>
+        </div>
+        <div class="card">
+          <div class="card-label">整体缓存命中率</div>
+          <div id="all-cache-rate" class="stat-value">0%</div>
+          <div class="stat-sub">缓存读取占总输入比例</div>
+        </div>
+        <div class="card">
+          <div class="card-label">模型调用次数</div>
+          <div id="all-requests" class="stat-value">0</div>
+          <div id="all-requests-sub" class="stat-sub">涉及 0 个会话</div>
+        </div>
+      </section>
+
+      <section class="card analytics-card">
+        <div class="analytics-layout">
+          <div class="chart-section">
+            <div class="section-top">
+              <span id="chart-title" class="card-label">每日 Token 消耗趋势</span>
+              <span id="chart-filter-badge" class="filter-badge hidden">
+                <span id="chart-filter-name"></span>
+                <button type="button" id="clear-model-btn" class="link-btn">清除</button>
+              </span>
+            </div>
+            <div id="chart-wrap" class="chart-wrap">
+              <svg id="chart-svg" class="chart-svg" role="img" aria-label="Token 消耗柱状图"></svg>
+              <div id="chart-tooltip" class="chart-tooltip hidden"></div>
+            </div>
+          </div>
+
+          <aside class="models-section">
+            <div class="section-top">
+              <span class="card-label">模型过滤</span>
+              <button type="button" id="reset-model-btn" class="link-btn hidden">全部模型</button>
+            </div>
+            <div id="models-list" class="models-list">
+              <div class="empty">暂无模型记录</div>
+            </div>
+          </aside>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      const POLL_MS = 2000;
+      const $ = (id) => document.getElementById(id);
+
+      let mode = 'current';
+      let selectedRange = 'all';
+      let selectedModel = '';
+      let stepsExpanded = true; // 默认展开
+      let lastAllData = null;
+
+      function syncScheme() {
+        const probe = document.createElement('span');
+        probe.style.cssText = 'position:absolute;visibility:hidden;color:var(--background, #f7f7f8)';
+        document.documentElement.appendChild(probe);
+        const c = getComputedStyle(probe).color;
+        probe.remove();
+        const nums = (c.match(/[\d.]+/g) || []).map(Number);
+        if (nums.length < 3) return;
+        const scale = c.startsWith('color(') ? 1 : 255;
+        const [r, g, b] = nums.slice(0, 3).map((v) => v / scale);
+        const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+        document.documentElement.dataset.theme = lum < 0.5 ? 'dark' : 'light';
+      }
+      syncScheme();
+      new MutationObserver(syncScheme).observe(document.documentElement, {
+        attributes: true,
+        attributeFilter: ['style'],
+      });
+
+      const fmt = (n) => Number(n || 0).toLocaleString('zh-CN');
+      const fmtCompact = (n) => {
+        const num = Number(n || 0);
+        if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(2)}B`;
+        if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(2)}M`;
+        if (num >= 1_000) return `${(num / 1_000).toFixed(1)}K`;
+        return String(Math.round(num));
+      };
+      const fmtAxis = (n) => {
+        const num = Number(n || 0);
+        if (num === 0) return '0';
+        if (num >= 1_000_000) {
+          const v = num / 1_000_000;
+          return `${Number.isInteger(v) ? v : v.toFixed(1)}M`;
+        }
+        if (num >= 1_000) {
+          const v = num / 1_000;
+          return `${Number.isInteger(v) ? v : v.toFixed(1)}K`;
+        }
+        return String(Math.round(num));
+      };
+      const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+      }[c]));
+
+      async function getJson(path) {
+        const f = window.sidecar?.fetch ? window.sidecar.fetch.bind(window.sidecar) : fetch;
+        const res = await f(path, { method: 'GET' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      }
+
+      function updateModeUI() {
+        const isCurrent = mode === 'current';
+        $('mode-current').classList.toggle('active', isCurrent);
+        $('mode-current').setAttribute('aria-selected', String(isCurrent));
+        $('mode-all').classList.toggle('active', !isCurrent);
+        $('mode-all').setAttribute('aria-selected', String(!isCurrent));
+
+        $('current-view').classList.toggle('hidden', !isCurrent);
+        $('all-view').classList.toggle('hidden', isCurrent);
+
+        document.querySelectorAll('.chip-btn[data-range]').forEach((btn) => {
+          btn.classList.toggle('active', btn.dataset.range === selectedRange);
+        });
+      }
+
+      function renderSteps(steps, stepCount) {
+        const count = Number.isFinite(stepCount) ? stepCount : steps.length;
+        $('steps-title').textContent = `每步消耗明细 (共 ${count} 步)`;
+        $('steps-toggle').setAttribute('aria-expanded', String(stepsExpanded));
+        $('steps-chevron').textContent = stepsExpanded ? '▾ 收起' : '▸ 展开';
+        $('steps-body').classList.toggle('hidden', !stepsExpanded);
+
+        const bodyEl = $('steps-body');
+        if (!steps.length) {
+          bodyEl.innerHTML = '<div class="empty">当前会话暂无对话步骤记录。</div>';
+          return;
+        }
+
+        const maxCtx = Math.max(1, ...steps.map((s) => Number(s.context) || 0));
+        const rows = [...steps].reverse().map((s) => {
+          const inp = Number(s.input) || 0;
+          const cache = Number(s.cache) || 0;
+          const out = Number(s.output) || 0;
+          const ctx = Number(s.context) || 0;
+          const inPct = ((inp / maxCtx) * 100).toFixed(2);
+          const cachePct = ((cache / maxCtx) * 100).toFixed(2);
+          const outPct = ((out / maxCtx) * 100).toFixed(2);
+          const t = s.time
+            ? new Date(s.time).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            : '';
+
+          return `
+            <div class="step-row">
+              <div class="step-idx">#${esc(s.step)}</div>
+              <div class="step-bar-wrap">
+                <div class="step-mini-track">
+                  <div class="seg-in" style="width:${inPct}%"></div>
+                  <div class="seg-cache" style="width:${cachePct}%"></div>
+                  <div class="seg-out" style="width:${outPct}%"></div>
+                </div>
+                <div class="step-breakdown">${esc(t)} · 输入 ${fmtCompact(inp)} · 缓存 ${fmtCompact(cache)} · 输出 ${fmtCompact(out)}</div>
+              </div>
+              <div class="step-total">${fmtCompact(ctx)}</div>
+            </div>
+          `;
+        });
+        bodyEl.innerHTML = rows.join('');
+      }
+
+      function renderCurrentView(data) {
+        const limit = Number(data.contextLimit) || 1_000_000;
+        const used = Number(data.contextUsed) || 0;
+        const pct = Math.min(100, (used / limit) * 100);
+
+        $('ctx-numbers').textContent = `${fmt(used)} / ${fmt(limit)} (${pct.toFixed(1)}%)`;
+        $('ctx-remaining').textContent = `剩余可用: ${fmt(Math.max(0, limit - used))}`;
+        const shortId = data.conversationId ? data.conversationId.slice(0, 8) : '-';
+        $('ctx-model-info').textContent = `模型: ${data.model || '-'} · 会话 ${shortId}`;
+
+        const bar = $('ctx-bar');
+        bar.style.width = `${pct.toFixed(2)}%`;
+        bar.className = 'progress-fill' + (pct >= 85 ? ' danger' : pct >= 60 ? ' warn' : '');
+
+        const steps = Array.isArray(data.steps) ? data.steps : [];
+        const last = steps[steps.length - 1] || { input: 0, cache: 0, output: 0, context: 0 };
+
+        $('cur-cache-rate').textContent = `${Number(data.cacheHitRate) || 0}%`;
+        $('cur-last-total').textContent = fmtCompact(last.context);
+        $('cur-last-sub').textContent = `输入 ${fmtCompact(last.input)} · 缓存 ${fmtCompact(last.cache)} · 输出 ${fmtCompact(last.output)}`;
+
+        const totalIn = (Number(data.totalInput) || 0) + (Number(data.totalCache) || 0);
+        const totalOut = Number(data.totalOutput) || 0;
+        const stepCount = Number(data.stepCount) || steps.length;
+        $('cur-session-total').textContent = fmtCompact(totalIn + totalOut);
+        $('cur-session-sub').textContent = `总输入 ${fmtCompact(totalIn)} · 总输出 ${fmtCompact(totalOut)} · 共 ${stepCount} 步`;
+
+        renderSteps(steps, stepCount);
+      }
+
+      function niceMax(rawMax) {
+        if (rawMax <= 0) return 100_000;
+        const exp = Math.pow(10, Math.floor(Math.log10(rawMax)));
+        const frac = rawMax / exp;
+        let niceFrac = 10;
+        if (frac <= 1) niceFrac = 1;
+        else if (frac <= 1.5) niceFrac = 1.5;
+        else if (frac <= 2) niceFrac = 2;
+        else if (frac <= 3) niceFrac = 3;
+        else if (frac <= 4) niceFrac = 4;
+        else if (frac <= 5) niceFrac = 5;
+        else if (frac <= 6) niceFrac = 6;
+        else if (frac <= 8) niceFrac = 8;
+        return niceFrac * exp;
+      }
+
+      function renderChart(data) {
+        const svg = $('chart-svg');
+        const wrap = $('chart-wrap');
+        const width = Math.max(280, Math.round(wrap.clientWidth || 480));
+        const height = 245;
+        svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
+
+        const buckets = Array.isArray(data.buckets) ? data.buckets : [];
+        const models = Array.isArray(data.models) ? data.models : [];
+        const colorMap = new Map(models.map((m) => [m.model, m.color]));
+        const stackOrder = models.map((m) => m.model);
+
+        const padL = 50;
+        const padR = 12;
+        const padT = 12;
+        const padB = 30;
+        const plotW = Math.max(40, width - padL - padR);
+        const plotH = Math.max(40, height - padT - padB);
+
+        const rawMax = Math.max(0, ...buckets.map((b) => Number(b.total) || 0));
+        const yMax = niceMax(rawMax);
+        const ticks = 4;
+
+        const parts = [];
+        for (let i = 0; i <= ticks; i++) {
+          const val = (yMax / ticks) * i;
+          const y = padT + plotH - (plotH * i) / ticks;
+          parts.push(`<line class="grid-line" x1="${padL}" y1="${y.toFixed(1)}" x2="${width - padR}" y2="${y.toFixed(1)}"/>`);
+          parts.push(`<text class="axis-text" x="${padL - 8}" y="${(y + 4).toFixed(1)}" text-anchor="end">${esc(fmtAxis(val))}</text>`);
+        }
+
+        if (!buckets.length || rawMax === 0) {
+          parts.push(`<text class="axis-text" x="${padL + plotW / 2}" y="${padT + plotH / 2}" text-anchor="middle">当前范围暂无消耗记录</text>`);
+        }
+
+        const n = Math.max(1, buckets.length);
+        const stepW = plotW / n;
+        const barW = Math.max(4, Math.min(26, stepW * 0.64));
+
+        // Pick at most ~7 X-axis labels evenly spaced so labels never collide
+        const maxLabels = Math.max(2, Math.floor(plotW / 64));
+        const labelStep = Math.max(1, Math.ceil(n / maxLabels));
+
+        buckets.forEach((b, idx) => {
+          const cx = padL + stepW * idx + stepW / 2;
+          const bx = cx - barW / 2;
+          const slotX = padL + stepW * idx;
+
+          const segments = [];
+          for (const mName of stackOrder) {
+            const val = Number(b.byModel?.[mName]) || 0;
+            if (val > 0) segments.push({ model: mName, val, color: colorMap.get(mName) || '#4f46e5' });
+          }
+          // Fallback for any model key not in stackOrder
+          for (const [mName, val] of Object.entries(b.byModel || {})) {
+            if (!colorMap.has(mName) && Number(val) > 0) {
+              segments.push({ model: mName, val: Number(val), color: '#64748b' });
+            }
+          }
+
+          let curY = padT + plotH;
+          const rects = segments.map((seg, sIdx) => {
+            const h = Math.max(1.5, (seg.val / yMax) * plotH);
+            curY -= h;
+            const isTop = sIdx === segments.length - 1;
+            const r = isTop && h >= 4 ? 2.5 : 0;
+            return `<rect x="${bx.toFixed(1)}" y="${curY.toFixed(1)}" width="${barW.toFixed(1)}" height="${h.toFixed(1)}" rx="${r}" fill="${esc(seg.color)}"/>`;
+          }).join('');
+
+          parts.push(`
+            <g class="bar-col" data-bidx="${idx}">
+              <rect class="bar-hover-bg" x="${slotX.toFixed(1)}" y="${padT}" width="${stepW.toFixed(1)}" height="${plotH}" rx="3"/>
+              ${rects}
+            </g>
+          `);
+
+          const isLast = idx === n - 1;
+          if (idx % labelStep === 0 || (isLast && n > 1 && (n - 1) % labelStep >= Math.ceil(labelStep / 2))) {
+            parts.push(`<text class="axis-text" x="${cx.toFixed(1)}" y="${height - 6}" text-anchor="middle">${esc(b.label)}</text>`);
+          }
+        });
+
+        svg.innerHTML = parts.join('');
+      }
+
+      function bindChartTooltip() {
+        const svg = $('chart-svg');
+        const tip = $('chart-tooltip');
+        const wrap = $('chart-wrap');
+
+        svg.addEventListener('mousemove', (e) => {
+          const col = e.target.closest('.bar-col');
+          if (!col || !lastAllData) {
+            tip.classList.add('hidden');
+            return;
+          }
+          const idx = Number(col.dataset.bidx);
+          const bucket = lastAllData.buckets?.[idx];
+          if (!bucket) {
+            tip.classList.add('hidden');
+            return;
+          }
+
+          const colorMap = new Map((lastAllData.models || []).map((m) => [m.model, m.color]));
+          const entries = Object.entries(bucket.byModel || {})
+            .filter(([, v]) => Number(v) > 0)
+            .sort((a, b) => b[1] - a[1]);
+
+          const rowsHtml = entries.length
+            ? entries.map(([name, val]) => `
+                <div class="tt-row">
+                  <span class="tt-name"><span class="tt-dot" style="background:${esc(colorMap.get(name) || '#4f46e5')}"></span>${esc(name)}</span>
+                  <span class="tt-val">${fmtCompact(val)}</span>
+                </div>
+              `).join('')
+            : '<div class="tt-row"><span>无消耗</span><span class="tt-val">0</span></div>';
+
+          tip.innerHTML = `
+            <div class="tt-title">
+              <span>${esc(bucket.key)} (${esc(bucket.label)})</span>
+              <span class="tt-val">${fmtCompact(bucket.total)}</span>
+            </div>
+            ${rowsHtml}
+          `;
+          tip.classList.remove('hidden');
+
+          const wrapRect = wrap.getBoundingClientRect();
+          const tipRect = tip.getBoundingClientRect();
+          let left = e.clientX - wrapRect.left + 12;
+          if (left + tipRect.width > wrapRect.width - 4) {
+            left = Math.max(4, e.clientX - wrapRect.left - tipRect.width - 12);
+          }
+          let top = e.clientY - wrapRect.top - 12;
+          if (top + tipRect.height > wrapRect.height) {
+            top = Math.max(4, wrapRect.height - tipRect.height - 4);
+          }
+          tip.style.left = `${left}px`;
+          tip.style.top = `${Math.max(4, top)}px`;
+        });
+
+        svg.addEventListener('mouseleave', () => {
+          tip.classList.add('hidden');
+        });
+      }
+
+      function renderModelsList(data) {
+        const listEl = $('models-list');
+        const models = Array.isArray(data.models) ? data.models : [];
+        const activeFilter = data.selectedModel || '';
+
+        $('reset-model-btn').classList.toggle('hidden', !activeFilter);
+        $('chart-filter-badge').classList.toggle('hidden', !activeFilter);
+        $('chart-filter-name').textContent = activeFilter ? `模型: ${activeFilter}` : '';
+
+        if (!models.length) {
+          listEl.innerHTML = '<div class="empty">该时间范围内暂无模型记录</div>';
+          return;
+        }
+
+        const maxTokens = Math.max(1, ...models.map((m) => Number(m.totalTokens) || 0));
+        listEl.innerHTML = models.map((m) => {
+          const isSelected = activeFilter === m.model;
+          const isDimmed = Boolean(activeFilter) && !isSelected;
+          const barPct = Math.max(2, (m.totalTokens / maxTokens) * 100).toFixed(1);
+          const tip = `输入 ${fmt(m.inputTokens)} · 缓存 ${fmt(m.cacheTokens)} · 输出 ${fmt(m.outputTokens)}`;
+          return `
+            <button type="button" class="model-item${isSelected ? ' selected' : ''}${isDimmed ? ' dimmed' : ''}" data-model="${esc(m.model)}" title="${esc(tip)}">
+              <div class="model-top">
+                <span class="model-name-wrap">
+                  <span class="model-dot" style="background:${esc(m.color)}"></span>
+                  <span class="model-name">${esc(m.model)}</span>
+                </span>
+                <span class="model-val">${fmtCompact(m.totalTokens)}</span>
+              </div>
+              <div class="model-bar-track">
+                <div class="model-bar-fill" style="width:${barPct}%;background:${esc(m.color)}"></div>
+              </div>
+              <div class="model-meta">
+                ${fmt(m.requests)} 次请求 · 命中率 ${m.cacheHitRate}% · 占比 ${m.sharePct}%
+              </div>
+            </button>
+          `;
+        }).join('');
+      }
+
+      function renderAllView(data) {
+        lastAllData = data;
+        if (selectedModel && !data.selectedModel) {
+          selectedModel = '';
+        }
+
+        const isHourly = data.granularity === 'hour';
+        $('granularity-hint').textContent = isHourly ? '粒度：每小时统计 (00:00 - 23:00)' : '粒度：每天统计';
+        $('chart-title').textContent = isHourly ? '每小时 Token 消耗分布' : '每天 Token 消耗趋势';
+
+        const totalIn = Number(data.totalInput) || 0;
+        const totalCache = Number(data.totalCache) || 0;
+        const totalOut = Number(data.totalOutput) || 0;
+        const totalTokens = Number(data.totalTokens) || 0;
+
+        $('all-total').textContent = fmtCompact(totalTokens);
+        $('all-total-sub').textContent = `输入 ${fmtCompact(totalIn)} · 缓存 ${fmtCompact(totalCache)} · 输出 ${fmtCompact(totalOut)}`;
+        $('all-cache-rate').textContent = `${Number(data.cacheHitRate) || 0}%`;
+        $('all-requests').textContent = fmt(data.stepCount);
+        $('all-requests-sub').textContent = `涉及 ${Number(data.conversationCount) || 0} 个活跃会话`;
+
+        renderModelsList(data);
+        renderChart(data);
+      }
+
+      function render(data) {
+        updateModeUI();
+        if (data.mode === 'all' || mode === 'all') {
+          renderAllView(data);
+        } else {
+          renderCurrentView(data);
+        }
+      }
+
+      $('mode-current').addEventListener('click', () => {
+        if (mode === 'current') return;
+        mode = 'current';
+        updateModeUI();
+        poll();
+      });
+
+      $('mode-all').addEventListener('click', () => {
+        if (mode === 'all') return;
+        mode = 'all';
+        updateModeUI();
+        poll();
+      });
+
+      document.querySelectorAll('.chip-btn[data-range]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const next = btn.dataset.range || 'all';
+          if (selectedRange === next) return;
+          selectedRange = next;
+          updateModeUI();
+          poll();
+        });
+      });
+
+      $('models-list').addEventListener('click', (e) => {
+        const item = e.target.closest('.model-item');
+        if (!item) return;
+        const m = item.dataset.model || '';
+        selectedModel = selectedModel === m ? '' : m;
+        poll();
+      });
+
+      const clearModelFilter = () => {
+        if (!selectedModel) return;
+        selectedModel = '';
+        poll();
+      };
+      $('clear-model-btn').addEventListener('click', clearModelFilter);
+      $('reset-model-btn').addEventListener('click', clearModelFilter);
+
+      $('steps-toggle').addEventListener('click', () => {
+        stepsExpanded = !stepsExpanded;
+        $('steps-toggle').setAttribute('aria-expanded', String(stepsExpanded));
+        $('steps-chevron').textContent = stepsExpanded ? '▾ 收起' : '▸ 展开';
+        $('steps-body').classList.toggle('hidden', !stepsExpanded);
+      });
+
+      bindChartTooltip();
+      if (typeof ResizeObserver !== 'undefined') {
+        new ResizeObserver(() => {
+          if (mode === 'all' && lastAllData) renderChart(lastAllData);
+        }).observe($('chart-wrap'));
+      }
+
+      async function poll() {
+        const pill = $('live-pill');
+        const label = $('live-text');
+        try {
+          const qs = new URLSearchParams();
+          qs.set('mode', mode);
+          qs.set('tzOffset', String(new Date().getTimezoneOffset()));
+          if (mode === 'current') {
+            const activeId = window.sidecar?.conversationId || '';
+            if (activeId) qs.set('conversationId', activeId);
+          } else {
+            qs.set('range', selectedRange);
+            if (selectedModel) qs.set('model', selectedModel);
+          }
+          const data = await getJson(`/api/tokens?${qs.toString()}`);
+          pill.classList.remove('err');
+          label.textContent = '实时';
+          render(data);
+        } catch {
+          pill.classList.add('err');
+          label.textContent = '离线';
+        }
+      }
+
+      updateModeUI();
+      poll();
+      setInterval(poll, POLL_MS);
+    })();
+  </script>
+</body>
+</html>
