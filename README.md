@@ -2,6 +2,10 @@
 
 一个用于 **Google Antigravity** 的自定义 UI 插件（Sidecar），在右侧辅助面板中实时展示**当前会话的上下文窗口占用**以及**所有历史会话的 Token 消耗趋势与模型分布**。
 
+## 效果预览
+
+![Token Monitor 效果预览](./assets/preview.png)
+
 ## 功能特性
 
 ### 1. 当前会话监控
@@ -30,7 +34,8 @@ token-monitor/
 ├── plugin.json                      # 插件清单
 ├── README.md                        # 说明文档
 ├── assets/
-│   └── logo.svg                     # 插件图标
+│   ├── logo.svg                     # 插件图标
+│   └── preview.png                  # 效果图预览
 └── sidecars/
     └── dashboard/
         ├── package.json             # ESM 模块声明
