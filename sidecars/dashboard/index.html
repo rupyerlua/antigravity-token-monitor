@@ -223,8 +223,15 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
       gap: 12px;
     }
+    .grid.grid-4 {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+    @media (max-width: 760px) {
+      .grid.grid-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     @media (max-width: 480px) {
-      .grid { grid-template-columns: 1fr; }
+      .grid,
+      .grid.grid-4 { grid-template-columns: 1fr; }
     }
     .stat-value {
       font-family: var(--tm-mono);
@@ -237,6 +244,27 @@
       font-size: 13px;
       color: var(--tm-fg-muted);
       word-break: break-word;
+    }
+    .stat-lines {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+      margin-top: 4px;
+    }
+    .stat-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+    .stat-k {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+    }
+    .stat-v {
+      color: var(--tm-fg);
+      font-weight: 500;
     }
     /* Current mode collapsible steps */
     .legend {
@@ -597,7 +625,12 @@
         </div>
       </section>
 
-      <section class="grid">
+      <section class="grid grid-4">
+        <div class="card">
+          <div class="card-label">平均生成速度</div>
+          <div id="cur-speed" class="stat-value">—</div>
+          <div id="cur-speed-sub" class="stat-sub">暂无耗时数据</div>
+        </div>
         <div class="card">
           <div class="card-label">缓存命中率</div>
           <div id="cur-cache-rate" class="stat-value">0%</div>
@@ -606,12 +639,20 @@
         <div class="card">
           <div class="card-label">最新一轮消耗</div>
           <div id="cur-last-total" class="stat-value">0</div>
-          <div id="cur-last-sub" class="stat-sub">输入 0 · 缓存 0 · 输出 0</div>
+          <div id="cur-last-sub" class="stat-sub stat-lines">
+            <div class="stat-line"><span class="stat-k"><span class="dot dot-in"></span>输入</span><span class="stat-v">0</span></div>
+            <div class="stat-line"><span class="stat-k"><span class="dot dot-cache"></span>缓存</span><span class="stat-v">0</span></div>
+            <div class="stat-line"><span class="stat-k"><span class="dot dot-out"></span>输出</span><span class="stat-v">0</span></div>
+          </div>
         </div>
         <div class="card">
           <div class="card-label">本会话累计</div>
           <div id="cur-session-total" class="stat-value">0</div>
-          <div id="cur-session-sub" class="stat-sub">总输入 0 · 总输出 0</div>
+          <div id="cur-session-sub" class="stat-sub stat-lines">
+            <div class="stat-line"><span class="stat-k"><span class="dot dot-in"></span>输入</span><span class="stat-v">0</span></div>
+            <div class="stat-line"><span class="stat-k"><span class="dot dot-cache"></span>缓存</span><span class="stat-v">0</span></div>
+            <div class="stat-line"><span class="stat-k"><span class="dot dot-out"></span>输出</span><span class="stat-v">0</span></div>
+          </div>
         </div>
       </section>
 
@@ -784,7 +825,9 @@
         }
 
         const maxCtx = Math.max(1, ...steps.map((s) => Number(s.context) || 0));
-        const rows = [...steps].reverse().map((s) => {
+        const totalSteps = Math.max(count, steps.length);
+        const rows = [...steps].reverse().map((s, revIdx) => {
+          const seqNum = totalSteps - revIdx;
           const inp = Number(s.input) || 0;
           const cache = Number(s.cache) || 0;
           const out = Number(s.output) || 0;
@@ -798,7 +841,7 @@
 
           return `
             <div class="step-row">
-              <div class="step-idx">#${esc(s.step)}</div>
+              <div class="step-idx" title="轨迹步骤 #${esc(s.step)}">#${seqNum}</div>
               <div class="step-bar-wrap">
                 <div class="step-mini-track">
                   <div class="seg-in" style="width:${inPct}%"></div>
@@ -831,15 +874,38 @@
         const steps = Array.isArray(data.steps) ? data.steps : [];
         const last = steps[steps.length - 1] || { input: 0, cache: 0, output: 0, context: 0 };
 
+        const avgTps = Number(data.avgSpeedTps) || 0;
+        const avgTtft = Number(data.avgTtftSec) || 0;
+        if (avgTps > 0) {
+          $('cur-speed').textContent = `${avgTps.toFixed(1)} tok/s`;
+          $('cur-speed-sub').textContent = avgTtft > 0
+            ? `平均首字 ${avgTtft.toFixed(2)}s`
+            : '本会话平均输出速率';
+        } else {
+          $('cur-speed').textContent = '—';
+          $('cur-speed-sub').textContent = '暂无耗时数据';
+        }
+
+        function renderTokenBreakdown(inp, cache, out) {
+          return [
+            ['dot-in', '输入', inp],
+            ['dot-cache', '缓存', cache],
+            ['dot-out', '输出', out],
+          ].map(([dotClass, label, val]) => (
+            `<div class="stat-line"><span class="stat-k"><span class="dot ${dotClass}"></span>${label}</span><span class="stat-v">${fmtCompact(val)}</span></div>`
+          )).join('');
+        }
+
         $('cur-cache-rate').textContent = `${Number(data.cacheHitRate) || 0}%`;
         $('cur-last-total').textContent = fmtCompact(last.context);
-        $('cur-last-sub').textContent = `输入 ${fmtCompact(last.input)} · 缓存 ${fmtCompact(last.cache)} · 输出 ${fmtCompact(last.output)}`;
+        $('cur-last-sub').innerHTML = renderTokenBreakdown(last.input, last.cache, last.output);
 
-        const totalIn = (Number(data.totalInput) || 0) + (Number(data.totalCache) || 0);
+        const totalNewIn = Number(data.totalInput) || 0;
+        const totalCache = Number(data.totalCache) || 0;
         const totalOut = Number(data.totalOutput) || 0;
         const stepCount = Number(data.stepCount) || steps.length;
-        $('cur-session-total').textContent = fmtCompact(totalIn + totalOut);
-        $('cur-session-sub').textContent = `总输入 ${fmtCompact(totalIn)} · 总输出 ${fmtCompact(totalOut)} · 共 ${stepCount} 步`;
+        $('cur-session-total').textContent = fmtCompact(totalNewIn + totalCache + totalOut);
+        $('cur-session-sub').innerHTML = renderTokenBreakdown(totalNewIn, totalCache, totalOut);
 
         renderSteps(steps, stepCount);
       }

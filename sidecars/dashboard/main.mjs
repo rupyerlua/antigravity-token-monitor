@@ -32,9 +32,11 @@ const MODEL_ALIAS_MAP = new Map([
   ['gemini-flash-worker-agy', 'Gemini 4 Hydrogen (Orchestrator)'],
 ]);
 
+const META_CACHE_VERSION = 2;
+
 // In-memory cache keyed by transcript path -> { key, convId, path, mtimeMs, hasExplicitStepModels, title, currentModel, steps }
 const transcriptCache = new Map();
-// In-memory RPC metadata cache keyed by convId -> { key, stepModels: Record<string, string>, maxContextTokens: number }
+// In-memory RPC metadata cache keyed by convId -> { v, key, stepModels, stepTimings, maxContextTokens }
 const genMetaCache = loadDiskMetaCache();
 let diskCacheDirty = false;
 
@@ -52,10 +54,12 @@ function loadDiskMetaCache() {
     const raw = JSON.parse(readFileSync(p, 'utf-8'));
     if (raw && typeof raw === 'object') {
       for (const [k, v] of Object.entries(raw)) {
-        if (v && typeof v === 'object' && v.key) {
+        if (v && typeof v === 'object' && v.key && v.v === META_CACHE_VERSION) {
           map.set(k, {
+            v: META_CACHE_VERSION,
             key: String(v.key),
             stepModels: v.stepModels && typeof v.stepModels === 'object' ? v.stepModels : {},
+            stepTimings: v.stepTimings && typeof v.stepTimings === 'object' ? v.stepTimings : {},
             maxContextTokens: Number(v.maxContextTokens) || 0,
           });
         }
@@ -304,9 +308,19 @@ export function parseTranscriptFile(transcriptPath, convId) {
   return parsed;
 }
 
+function parseDurationSec(str) {
+  if (typeof str !== 'string' || !str.trim()) return 0;
+  const s = str.trim();
+  const secMatch = s.match(/^([\d.]+)s$/);
+  if (secMatch) return Number(secMatch[1]) || 0;
+  const msMatch = s.match(/^([\d.]+)ms$/);
+  if (msMatch) return (Number(msMatch[1]) || 0) / 1000;
+  return 0;
+}
+
 async function fetchGeneratorMetadata(convId, cacheKey) {
   const cached = genMetaCache.get(convId);
-  if (cached && cached.key === cacheKey) {
+  if (cached && cached.v === META_CACHE_VERSION && cached.key === cacheKey) {
     return cached;
   }
 
@@ -335,6 +349,7 @@ async function fetchGeneratorMetadata(convId, cacheKey) {
     const json = await res.json();
     const list = Array.isArray(json?.generatorMetadata) ? json.generatorMetadata : [];
     const stepModels = {};
+    const stepTimings = {};
     let maxContextTokens = 0;
 
     for (const item of list) {
@@ -350,14 +365,21 @@ async function fetchGeneratorMetadata(convId, cacheKey) {
       const maxCtx = Number(cm.chatStartMetadata?.contextWindowMetadata?.maxContextTokens) || 0;
       if (maxCtx > 0) maxContextTokens = maxCtx;
 
-      if (resolvedModel && Array.isArray(item.stepIndices)) {
+      const ttftSec = parseDurationSec(cm.timeToFirstToken);
+      const streamSec = parseDurationSec(cm.streamingDuration);
+
+      if (Array.isArray(item.stepIndices)) {
         for (const idx of item.stepIndices) {
-          stepModels[String(Number(idx))] = resolvedModel;
+          const k = String(Number(idx));
+          if (resolvedModel) stepModels[k] = resolvedModel;
+          if (ttftSec > 0 || streamSec > 0) {
+            stepTimings[k] = { ttftSec, streamSec };
+          }
         }
       }
     }
 
-    const entry = { key: cacheKey, stepModels, maxContextTokens };
+    const entry = { v: META_CACHE_VERSION, key: cacheKey, stepModels, stepTimings, maxContextTokens };
     genMetaCache.set(convId, entry);
     diskCacheDirty = true;
     return entry;
@@ -469,6 +491,8 @@ export async function computeStats({
         contextUsed: 0,
         contextLimit: DEFAULT_CONTEXT_LIMIT,
         cacheHitRate: 0,
+        avgSpeedTps: 0,
+        avgTtftSec: 0,
         totalInput: 0,
         totalCache: 0,
         totalOutput: 0,
@@ -485,11 +509,29 @@ export async function computeStats({
     let totalInput = 0;
     let totalCache = 0;
     let totalOutput = 0;
+    let timedOutput = 0;
+    let timedStreamSec = 0;
+    let timedTtftSec = 0;
+    let ttftCount = 0;
     const resolvedSteps = target.steps.map((s) => {
       totalInput += s.input;
       totalCache += s.cache;
       totalOutput += s.output;
-      return { ...s, model: resolveStepModel(s, meta) };
+      const timing = meta?.stepTimings?.[String(Number(s.step))];
+      const streamSec = Number(timing?.streamSec) || 0;
+      const ttftSec = Number(timing?.ttftSec) || 0;
+      if (streamSec > 0 && s.output > 0) {
+        timedOutput += s.output;
+        timedStreamSec += streamSec;
+      }
+      if (ttftSec > 0) {
+        timedTtftSec += ttftSec;
+        ttftCount += 1;
+      }
+      return {
+        ...s,
+        model: resolveStepModel(s, meta),
+      };
     });
 
     const last = resolvedSteps[resolvedSteps.length - 1] || {
@@ -502,6 +544,8 @@ export async function computeStats({
     const promptTotal = last.input + last.cache;
     const cacheHitRate = promptTotal > 0 ? Math.round((last.cache / promptTotal) * 100) : 0;
     const contextLimit = meta?.maxContextTokens > 0 ? meta.maxContextTokens : DEFAULT_CONTEXT_LIMIT;
+    const avgSpeedTps = timedStreamSec > 0 ? Math.round((timedOutput / timedStreamSec) * 10) / 10 : 0;
+    const avgTtftSec = ttftCount > 0 ? Math.round((timedTtftSec / ttftCount) * 100) / 100 : 0;
 
     return {
       mode: 'current',
@@ -511,6 +555,8 @@ export async function computeStats({
       contextUsed: last.context,
       contextLimit,
       cacheHitRate,
+      avgSpeedTps,
+      avgTtftSec,
       totalInput,
       totalCache,
       totalOutput,
